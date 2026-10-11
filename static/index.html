@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Quotex Signal Dashboard</title>
+  <style>
+    :root{--bg:#0b0f14;--card:#0f1720;--muted:#9aa4b2;--accent:#22c55e}
+    body{margin:0;font-family:Inter,Arial,Helvetica,sans-serif;background:linear-gradient(180deg,#071019 0%,#071a23 100%);color:#e6eef6}
+    .container{max-width:980px;margin:24px auto;padding:16px}
+    .header{display:flex;gap:8px;align-items:center;justify-content:space-between}
+    .controls{display:flex;gap:8px;align-items:center}
+    select,input,button{background:#071721;border:1px solid #1f2a33;color:#e6eef6;padding:8px;border-radius:8px}
+    .card{background:var(--card);padding:20px;border-radius:12px;margin-top:16px}
+    .signal{font-size:48px;text-align:center;padding:24px;border-radius:12px}
+    .signal.call{background:linear-gradient(90deg,#08321a,#083f23)}
+    .signal.put{background:linear-gradient(90deg,#3a0810,#4a0814)}
+    .signal.neutral{background:#1a2430}
+    .indicators{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+    .ind{background:#071721;padding:10px;border-radius:8px;min-width:140px}
+    table{width:100%;border-collapse:collapse;margin-top:12px}
+    th,td{padding:8px;text-align:left;border-bottom:1px solid #0f1720}
+    .win{color:var(--accent)}.loss{color:#f43f5e}
+    .small{font-size:13px;color:var(--muted)}
+    footer{margin-top:12px;font-size:13px;color:var(--muted)}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div>
+        <input id="backend" placeholder="Backend URL" style="width:320px" value="http://localhost:8000" />
+        <span class="small">Configure backend URL</span>
+      </div>
+      <div class="controls">
+        <select id="asset"><option>EURUSD_otc</option><option>GBPUSD_otc</option><option>USDJPY_otc</option></select>
+        <select id="tf"><option value="1">M1</option><option value="5">M5</option></select>
+        <button id="start">Start</button>
+        <button id="stop" disabled>Stop</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div id="signalCard" class="signal neutral">
+        NEUTRAL<br /><span id="conf">--%</span>
+        <div class="small" id="countdown">Next candle in --s</div>
+      </div>
+
+      <div class="indicators" id="indicators"></div>
+
+      <div class="card">
+        <h3 class="small">History</h3>
+        <table>
+          <thead><tr><th>Time</th><th>Asset</th><th>TF</th><th>Signal</th><th>Conf</th><th>Result</th></tr></thead>
+          <tbody id="history"></tbody>
+        </table>
+      </div>
+      <footer>Disclaimer: Signals are probabilities, not guarantees. Trade at your own risk.</footer>
+    </div>
+  </div>
+
+  <script>
+    let timer = null
+    let running = false
+    const el = (id)=>document.getElementById(id)
+
+    function renderSignal(data){
+      const card = el('signalCard')
+      const conf = el('conf')
+      card.className = 'signal ' + (data.direction==='CALL'?'call':data.direction==='PUT'?'put':'neutral')
+      card.innerHTML = `<div>${data.direction}</div><div id="conf">${data.confidence}%</div><div class="small" id="countdown">Next candle in --s</div>`
+      // indicators
+      const inds = el('indicators')
+      inds.innerHTML=''
+      const ind = data.indicators
+      for(const k in ind){
+        const node = document.createElement('div'); node.className='ind'
+        if(k==='bollinger'){
+          node.innerHTML = `<strong>${k}</strong><div class="small">upper:${ind[k].upper} lower:${ind[k].lower}</div>`
+        }else{
+          node.innerHTML = `<strong>${k}</strong><div class="small">${JSON.stringify(ind[k])}</div>`
+        }
+        inds.appendChild(node)
+      }
+    }
+
+    async function fetchSignal(){
+      const base = el('backend').value.replace(/\/$/,'')
+      const asset = el('asset').value
+      const tf = el('tf').value
+      try{
+        const res = await fetch(`${base}/api/signal?asset=${asset}&timeframe=${tf}`)
+        if(!res.ok) throw new Error(await res.text())
+        const data = await res.json()
+        renderSignal(data)
+        loadHistory()
+        startCountdown(data.candle_close_time)
+      }catch(e){
+        console.error(e)
+      }
+    }
+
+    function startCountdown(closeTs){
+      const cd = el('countdown')
+      if(timer) clearInterval(timer)
+      timer = setInterval(()=>{
+        const s = Math.max(0, closeTs - Math.floor(Date.now()/1000))
+        cd.textContent = `Next candle in ${s}s`
+      },500)
+    }
+
+    async function loadHistory(){
+      const base = el('backend').value.replace(/\/$/,'')
+      try{
+        const res = await fetch(`${base}/api/history`)
+        const data = await res.json()
+        const tb = el('history')
+        tb.innerHTML=''
+        for(const row of data.slice(0,20)){
+          const tr = document.createElement('tr')
+          tr.innerHTML = `<td class="small">${new Date(row.generated_at*1000).toLocaleString()}</td><td>${row.asset}</td><td>${row.timeframe}</td><td>${row.direction}</td><td>${row.confidence}%</td><td class='${row.result==='WIN'?'win':'loss'}'>${row.result||'PENDING'}</td>`
+          tb.appendChild(tr)
+        }
+      }catch(e){console.error(e)}
+    }
+
+    el('start').addEventListener('click', ()=>{ running=true; el('start').disabled=true; el('stop').disabled=false; fetchSignal(); window._int = setInterval(fetchSignal, 8000) })
+    el('stop').addEventListener('click', ()=>{ running=false; el('start').disabled=false; el('stop').disabled=true; clearInterval(window._int) })
+  </script>
+</body>
+</html>
